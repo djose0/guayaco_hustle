@@ -1219,8 +1219,13 @@
             spawnBahiaDecor();
         }
         
+        // Espaciado dinámico: la distancia en Z entre oleadas es max(35, speed*1.2).
+        // Dividido entre speed nos da el intervalo en segundos.
+        // Esto garantiza que a cualquier velocidad el jugador tiene tiempo
+        // real suficiente para completar un maniobra de hasta 2 carriles.
         masterSpawnTimer += dt;
-        if (masterSpawnTimer > 35/speed) {
+        const waveInterval = Math.max(35, speed * 1.2) / speed;
+        if (masterSpawnTimer > waveInterval) {
             masterSpawnTimer = 0;
             spawnEntityWave();
         }
@@ -1283,24 +1288,74 @@
         }
     }
 
-    // --- SPAWNERS ---
-    function spawnEntityWave() {
-        const r = Math.random();
-        if (r < 0.4) {
-            const safe = Math.floor(Math.random()*3);
-            for(let i=0; i<3; i++) {
-                if(i !== safe) spawnObstacle(i);
-                else if(Math.random() > 0.5) spawnCoinRow(i);
-            }
-        } else if (r < 0.8) {
-            spawnObstacle(Math.floor(Math.random()*3));
-        } else {
-            const l = Math.floor(Math.random()*3);
-            const rr = Math.random();
-            if(rr<0.1) spawnSpecialItem(l, 'iphone');
-            else if(rr<0.3) spawnSpecialItem(l, 'phone');
-            else spawnCoinRow(l);
+    // =========================================================================
+    // SISTEMA DE OLEADAS "JUEGO JUSTO"
+    //
+    // shuffleArray  → Fisher-Yates sobre una copia del array.
+    // getWaveConfig → decide la ESTRUCTURA de la oleada: cuántos obstáculos,
+    //                 qué carriles, y qué recompensas van en el hueco.
+    //                 NUNCA retorna más de 2 carriles bloqueados.
+    // spawnEntityWave → ejecutor: llama a getWaveConfig y materializa la oleada.
+    // spawnObstacle   → sin cambios, solo recibe un laneIdx y crea el mesh.
+    // =========================================================================
+
+    // Fisher-Yates shuffle sobre una copia
+    function shuffleArray(arr) {
+        const a = arr.slice();
+        for (let i = a.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [a[i], a[j]] = [a[j], a[i]];
         }
+        return a;
+    }
+
+    // Retorna { obstacleLanes: [idx, ...], rewardLanes: [idx, ...] }
+    // obstacleLanes tiene máximo 2 elementos.
+    // rewardLanes son los carriles que NO tienen obstáculo → ahí van coins/items.
+    function getWaveConfig() {
+        // 15% de las oleadas son pura recompensa (sin obstáculos) → breathing room
+        if (Math.random() < 0.15) {
+            return { obstacleLanes: [], rewardLanes: [0, 1, 2] };
+        }
+
+        // Decidir cantidad de obstáculos: 1 o 2.
+        // P(2) = 0.45 → retador pero no asfixiante. Se siente que "a veces
+        // te cerran el paso" pero no siempre.
+        const count = Math.random() < 0.45 ? 2 : 1;
+
+        // Shuffle los 3 carriles y toma los primeros 'count'.
+        // Esto es lo que garantiza la regla de oro: slice(0, count) con count<=2
+        // es físicamente imposible que produzca 3.
+        const shuffled   = shuffleArray([0, 1, 2]);
+        const obsLanes   = shuffled.slice(0, count);
+        const freeLanes  = shuffled.slice(count);   // los que no tienen obstáculo
+
+        return { obstacleLanes: obsLanes, rewardLanes: freeLanes };
+    }
+
+    function spawnEntityWave() {
+        const config = getWaveConfig();
+
+        // --- Obstáculos en los carriles designados ---
+        config.obstacleLanes.forEach(laneIdx => {
+            spawnObstacle(laneIdx);
+        });
+
+        // --- Recompensas en los carriles libres ---
+        // Si no hay obstáculos esta oleada, todos los carriles reciben recompensa.
+        // Si hay 1-2 obstáculos, los carriles libres reciben recompensa con
+        // probabilidad alta → incentiva al jugador a ir al hueco.
+        config.rewardLanes.forEach(laneIdx => {
+            // Si esta oleada tiene obstáculos, la recompensa es casi segura
+            // en el hueco (85%). Si no tiene obstáculos, es 50%.
+            const rewardChance = config.obstacleLanes.length > 0 ? 0.85 : 0.50;
+            if (Math.random() < rewardChance) {
+                const rr = Math.random();
+                if      (rr < 0.08)  spawnSpecialItem(laneIdx, 'iphone');  // raro, vale mucho
+                else if (rr < 0.25)  spawnSpecialItem(laneIdx, 'phone');   // poco común
+                else                 spawnCoinRow(laneIdx);                // coins = default
+            }
+        });
     }
 
     function spawnObstacle(laneIdx) {
